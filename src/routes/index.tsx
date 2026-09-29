@@ -133,17 +133,17 @@ function Index() {
           </p>
 
           {/* Countdown */}
-          <div className="animate-fade-in mt-12 flex items-center justify-center gap-2.5 sm:gap-4">
+          <div className="animate-fade-in mx-auto mt-12 flex w-full max-w-md items-center justify-center gap-2 sm:gap-4">
             <CountdownUnit value={days} label="Days" />
-            <span className="text-display-lg -mt-8 font-light text-muted-foreground/50">
+            <span className="text-display-lg -mt-8 hidden font-light text-muted-foreground/50 sm:block">
               :
             </span>
             <CountdownUnit value={hours} label="Hours" />
-            <span className="text-display-lg -mt-8 font-light text-muted-foreground/50">
+            <span className="text-display-lg -mt-8 hidden font-light text-muted-foreground/50 sm:block">
               :
             </span>
             <CountdownUnit value={minutes} label="Minutes" />
-            <span className="text-display-lg -mt-8 font-light text-muted-foreground/50">
+            <span className="text-display-lg -mt-8 hidden font-light text-muted-foreground/50 sm:block">
               :
             </span>
             <CountdownUnit value={seconds} label="Seconds" />
