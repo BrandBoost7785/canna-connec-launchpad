@@ -56,7 +56,7 @@ function useCountdown(target: Date) {
 
 function CountdownUnit({ value, label }: { value: number; label: string }) {
   return (
-    <div className="countdown-card flex flex-col items-center justify-center rounded-2xl px-3 py-5 sm:px-6 sm:py-7 min-w-[4.5rem] sm:min-w-[7rem]">
+    <div className="countdown-card flex w-full flex-1 flex-col items-center justify-center rounded-2xl px-2 py-5 sm:w-auto sm:flex-none sm:px-6 sm:py-7 sm:min-w-[7rem]">
       <span className="countdown-value text-foreground">
         {String(value).padStart(2, "0")}
       </span>
