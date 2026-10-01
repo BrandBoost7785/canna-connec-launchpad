@@ -16,9 +16,18 @@ dist-ssr
 .nitro
 *.local
 
+# Environment files — never commit real values. Only .env.example is tracked.
+.env
+.env.*
+!.env.example
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
+.dev.vars.*
+
+# Test output
+coverage
 
 # Editor directories and files
 .vscode/*

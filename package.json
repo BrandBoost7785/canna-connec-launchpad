@@ -9,13 +9,20 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest",
+    "format:check": "prettier --check .",
+    "test:db": "vitest run --project db",
+    "test:all": "vitest run"
   },
   "overrides": {
     "rolldown": "1.2.1"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
+    "@noble/hashes": "2.4.0",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.8",
@@ -73,9 +80,11 @@
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "^2.24.0",
     "@types/node": "^22.16.5",
+    "@types/pg": "8.23.1",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "embedded-postgres": "17.10.0-beta.17",
     "eslint": "^9.32.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
@@ -83,9 +92,17 @@
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
     "nitro": "3.0.260603-beta",
+    "pg": "8.23.0",
     "prettier": "^3.7.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "8.1.5"
-  }
+    "vite": "8.1.5",
+    "vitest": "^5.0.2"
+  },
+  "trustedDependencies": [
+    "@embedded-postgres/linux-x64",
+    "@embedded-postgres/linux-arm64",
+    "@embedded-postgres/darwin-x64",
+    "@embedded-postgres/darwin-arm64"
+  ]
 }

@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { withSecurityHeaders, type SecurityHeaderOptions } from "./lib/security/headers";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -44,18 +45,37 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+function securityOptions(): SecurityHeaderOptions {
+  const e = typeof process !== "undefined" ? process.env : {};
+  return {
+    production: e["NODE_ENV"] === "production",
+    supabaseUrl: e["SUPABASE_URL"],
+    frameAncestors: e["CSP_FRAME_ANCESTORS"],
+  };
+}
+
+// Server-function responses can carry session tokens or private data: never cache.
+const isServerFnRequest = (request: Request) =>
+  new URL(request.url).pathname.startsWith("/_serverFn/");
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const opts = securityOptions();
+    const noStore = isServerFnRequest(request);
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
-      return await normalizeCatastrophicSsrResponse(response);
+      return withSecurityHeaders(await normalizeCatastrophicSsrResponse(response), opts, noStore);
     } catch (error) {
       console.error(error);
-      return new Response(renderErrorPage(), {
-        status: 500,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      return withSecurityHeaders(
+        new Response(renderErrorPage(), {
+          status: 500,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+        opts,
+        true,
+      );
     }
   },
 };

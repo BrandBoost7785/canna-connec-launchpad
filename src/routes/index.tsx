@@ -57,9 +57,7 @@ function useCountdown(target: Date) {
 function CountdownUnit({ value, label }: { value: number; label: string }) {
   return (
     <div className="countdown-card flex w-full flex-1 flex-col items-center justify-center rounded-2xl px-2 py-5 sm:w-auto sm:flex-none sm:px-6 sm:py-7 sm:min-w-[7rem]">
-      <span className="countdown-value text-foreground">
-        {String(value).padStart(2, "0")}
-      </span>
+      <span className="countdown-value text-foreground">{String(value).padStart(2, "0")}</span>
       <span className="mt-1.5 text-[0.65rem] sm:text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
         {label}
       </span>
@@ -95,11 +93,7 @@ function Index() {
         <header className="w-full">
           <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-6 sm:py-8">
             <div className="flex items-center gap-2.5">
-              <img
-                src={CCLogo}
-                alt="Canna-Connec logo"
-                className="h-8 w-8 rounded-lg"
-              />
+              <img src={CCLogo} alt="Canna-Connec logo" className="h-8 w-8 rounded-lg" />
               <span className="text-display-sm font-semibold text-foreground">
                 Canna<span className="text-primary">-</span>Connec
               </span>
@@ -127,9 +121,8 @@ function Index() {
           </h1>
 
           <p className="animate-fade-in mt-5 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-            Our new platform is launching soon — a smarter way to connect.
-            The countdown has started, and we can't wait to show you what's
-            next.
+            Our new platform is launching soon — a smarter way to connect. The countdown has
+            started, and we can't wait to show you what's next.
           </p>
 
           {/* Countdown */}
@@ -149,9 +142,7 @@ function Index() {
             <CountdownUnit value={seconds} label="Seconds" />
           </div>
 
-          <p className="mt-5 text-sm text-muted-foreground/80">
-            Launching Friday, 2 October
-          </p>
+          <p className="mt-5 text-sm text-muted-foreground/80">Launching Friday, 2 October</p>
 
           {/* Newsletter form */}
           <div className="animate-fade-in mt-12 w-full max-w-md">
@@ -164,11 +155,7 @@ function Index() {
                   stroke="currentColor"
                   strokeWidth={2.5}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M4.5 12.75l6 6 9-13.5"
-                  />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
                 <p className="text-sm font-medium text-foreground">
                   You're on the list — we'll let you know the moment we launch.
@@ -225,9 +212,7 @@ function Index() {
         <footer className="w-full pb-8">
           <div className="mx-auto max-w-5xl px-6">
             <div className="flex flex-col items-center gap-2 border-t border-border/60 pt-6 text-center">
-              <span className="text-sm font-medium text-foreground/80">
-                Canna-Connec
-              </span>
+              <span className="text-sm font-medium text-foreground/80">Canna-Connec</span>
               <span className="text-xs text-muted-foreground/60">
                 © 2026 Canna-Connec. All rights reserved.
               </span>
