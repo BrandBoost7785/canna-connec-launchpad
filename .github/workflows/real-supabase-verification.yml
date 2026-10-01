@@ -75,6 +75,7 @@ jobs:
           npm i --no-audit --no-fund wrangler@4 @sparticuz/chromium puppeteer-core
 
       - name: Reset the disposable project
+        id: reset
         run: bun run test:supabase:reset 2>&1 | tee "/tmp/real-logs/01-reset.log"
 
       - name: Apply migrations to the real project
@@ -87,7 +88,7 @@ jobs:
         run: bun run test:supabase 2>&1 | tee "/tmp/real-logs/04-suite.log"
 
       - name: Leave the project clean of test users
-        if: always()
+        if: ${{ always() && steps.reset.outcome != 'skipped' }}
         run: bun run test:supabase:reset 2>&1 | tee "/tmp/real-logs/05-cleanup.log"
 
       - name: Keep the logs as evidence
