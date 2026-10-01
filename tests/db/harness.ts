@@ -17,6 +17,15 @@ export const TEST_SETTINGS = {
   availability_check_minutes: 15,
   hide_out_of_stock_enabled: true,
   hide_out_of_stock_after_minutes: 45,
+  // Security policy: TEST FIXTURE VALUES ONLY. They are neither defaults nor
+  // recommendations - the business owner chooses these in production.
+  login_max_failed_attempts: 3,
+  login_lock_seconds: 900,
+  rate_limit_login_ip_attempts: 20,
+  rate_limit_login_ip_window_seconds: 600,
+  rate_limit_login_code_attempts: 10,
+  rate_limit_login_code_window_seconds: 900,
+  secret_code_min_length: 8,
 } as const;
 
 export type DbRole = "anon" | "authenticated" | "service_role";

@@ -48,7 +48,9 @@ function isH3SwallowedErrorBody(body: string): boolean {
 function securityOptions(): SecurityHeaderOptions {
   const e = typeof process !== "undefined" ? process.env : {};
   return {
-    production: e["NODE_ENV"] === "production",
+    // Resolved by Vite at build time. Do NOT use process.env.NODE_ENV: it is undefined in the
+    // Cloudflare Workers runtime, which silently disabled CSP and HSTS in the production build.
+    production: !import.meta.env.DEV,
     supabaseUrl: e["SUPABASE_URL"],
     frameAncestors: e["CSP_FRAME_ANCESTORS"],
   };

@@ -38,14 +38,32 @@ export const clientCodeSchema = z
       ),
   );
 
-export const MIN_SECRET_CODE_LENGTH = 8; // owner decision pending - see docs/SECURITY_NOTES.md
+/**
+ * Platform upper bound only (limits the CPU/memory an attacker can make Argon2id spend
+ * per request). It is NOT a policy value. The MINIMUM length is owner-configured
+ * (`business_settings.secret_code_min_length`) and applied when a secret is CREATED -
+ * see `secretCodeSchemaFor`. Login deliberately does not enforce a minimum, so a policy
+ * change can never lock out existing customers.
+ */
 export const MAX_SECRET_CODE_LENGTH = 128;
-export const secretCodeSchema = z
-  .string()
-  .min(MIN_SECRET_CODE_LENGTH, `At least ${MIN_SECRET_CODE_LENGTH} characters`)
-  .max(MAX_SECRET_CODE_LENGTH);
 
-export const passwordSchema = z.string().min(MIN_SECRET_CODE_LENGTH).max(MAX_SECRET_CODE_LENGTH);
+/** Verification-time schema: non-empty, bounded. No minimum length. */
+export const secretCodeSchema = z.string().min(1).max(MAX_SECRET_CODE_LENGTH);
+
+/** Creation-time schema using the OWNER-CONFIGURED minimum length (no default). */
+export function secretCodeSchemaFor(minLength: number) {
+  if (!Number.isInteger(minLength) || minLength < 1 || minLength > MAX_SECRET_CODE_LENGTH) {
+    throw new RangeError("secret_code_min_length is not configured to a valid value");
+  }
+  return z.string().min(minLength, `At least ${minLength} characters`).max(MAX_SECRET_CODE_LENGTH);
+}
+
+/**
+ * Account passwords: only bounded here. Password strength is enforced by the Supabase
+ * Auth project settings (external configuration, see docs/FOUNDATION.md); this app does
+ * not invent its own password policy.
+ */
+export const passwordSchema = z.string().min(1).max(MAX_SECRET_CODE_LENGTH);
 
 export function isValidTimeZone(tz: string): boolean {
   try {

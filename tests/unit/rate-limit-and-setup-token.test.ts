@@ -6,6 +6,7 @@ vi.mock("@tanstack/react-start/server", () => ({ getRequestHeader: () => undefin
 import { AppError } from "@/lib/errors";
 import { enforceRateLimit, rateLimitKey } from "@/server/rate-limit.server";
 import { secretsMatch } from "@/server/setup.server";
+import { getSetupRateLimit, securityPolicySchema } from "@/server/security-policy.server";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -59,5 +60,54 @@ describe("setup token comparison", () => {
     expect(await secretsMatch(t + "a", t)).toBe(false);
     expect(await secretsMatch("", t)).toBe(false);
     expect(await secretsMatch("y".repeat(48), t)).toBe(false);
+  });
+});
+
+describe("setup throttle is deployment-configured, with no built-in default", () => {
+  it("is refused (setup disabled) unless both values are valid positive integers", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [a, w] of [
+      ["", ""],
+      ["5", ""],
+      ["", "60"],
+      ["0", "60"],
+      ["5", "0"],
+      ["abc", "60"],
+      ["1.5", "60"],
+      ["5", "86401"],
+    ]) {
+      vi.stubEnv("SETUP_RATE_LIMIT_ATTEMPTS", a);
+      vi.stubEnv("SETUP_RATE_LIMIT_WINDOW_SECONDS", w);
+      expect(() => getSetupRateLimit(), `${a}/${w}`).toThrowError(
+        /configuration|required|Something|configured/i,
+      );
+    }
+  });
+  it("returns exactly what the deployer configured", () => {
+    vi.stubEnv("SETUP_RATE_LIMIT_ATTEMPTS", "7");
+    vi.stubEnv("SETUP_RATE_LIMIT_WINDOW_SECONDS", "123");
+    expect(getSetupRateLimit()).toEqual({ limit: 7, windowSeconds: 123 });
+  });
+});
+
+describe("security policy schema", () => {
+  const ok = {
+    login_max_failed_attempts: 1,
+    login_lock_seconds: 1,
+    rate_limit_login_ip_attempts: 1,
+    rate_limit_login_ip_window_seconds: 1,
+    rate_limit_login_code_attempts: 1,
+    rate_limit_login_code_window_seconds: 1,
+    secret_code_min_length: 1,
+  };
+  it("accepts a complete policy and rejects missing, null, zero or non-integer values", () => {
+    expect(securityPolicySchema.safeParse(ok).success).toBe(true);
+    for (const k of Object.keys(ok)) {
+      expect(securityPolicySchema.safeParse({ ...ok, [k]: null }).success, `${k} null`).toBe(false);
+      expect(securityPolicySchema.safeParse({ ...ok, [k]: 0 }).success, `${k} 0`).toBe(false);
+      expect(securityPolicySchema.safeParse({ ...ok, [k]: 1.5 }).success, `${k} 1.5`).toBe(false);
+      const { [k as keyof typeof ok]: _omit, ...rest } = ok;
+      expect(securityPolicySchema.safeParse(rest).success, `${k} omitted`).toBe(false);
+    }
   });
 });

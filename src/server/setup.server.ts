@@ -1,7 +1,7 @@
 import { AppError } from "@/lib/errors";
 import type { FirstRunSetupInput } from "@/lib/validation";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { AUTH_POLICY } from "./auth-policy";
+import { getSetupRateLimit } from "./security-policy.server";
 import { getClientIp } from "./request-context.server";
 import { enforceRateLimit } from "./rate-limit.server";
 import { adminRpc } from "./rpc.server";
@@ -29,7 +29,7 @@ export async function getSetupStatus(): Promise<{ setup_completed: boolean }> {
  * There is no default admin account and no built-in password.
  */
 export async function completeFirstRunSetup(input: FirstRunSetupInput): Promise<void> {
-  await enforceRateLimit("setup-ip", getClientIp(), AUTH_POLICY.perIpSetup);
+  await enforceRateLimit("setup-ip", getClientIp(), getSetupRateLimit());
 
   const expected = process.env["SETUP_TOKEN"];
   if (!expected || expected.length < 32) {
@@ -50,7 +50,15 @@ export async function completeFirstRunSetup(input: FirstRunSetupInput): Promise<
   });
   if (error || !data.user) {
     console.error("[setup] createUser failed", error?.message);
-    throw new AppError(error?.status === 422 ? "conflict" : "internal");
+    // Supabase Auth enforces the project's password policy and email uniqueness.
+    const code = (error as { code?: string } | null)?.code;
+    throw new AppError(
+      code === "weak_password"
+        ? "invalid_input"
+        : code === "email_exists" || code === "user_already_exists"
+          ? "conflict"
+          : "internal",
+    );
   }
   const adminId = data.user.id;
 

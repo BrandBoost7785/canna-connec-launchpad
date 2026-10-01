@@ -29,16 +29,22 @@ migrations were restored afterwards.
 
 ## Known limitations / residual risks
 
-1. **Shim, not real Supabase.** GoTrue/PostgREST were not available; the DB suite runs real PostgreSQL 17.10 with a shim of
-   Supabase roles. Repeat the RLS checks on a real dev project. Migration 09's explicit `REVOKE`s guard against Supabase default
-   grants, but only the shim's behaviour was tested.
+1. **Real Supabase has NOT been verified.** The DB suite runs real PostgreSQL 17.10 with a shim of Supabase roles; no
+   GoTrue/PostgREST was reachable. Migration 09's explicit `REVOKE`s guard against Supabase's default grants, but only the
+   shim's behaviour was tested. A ready, never-executed suite exists in `tests/supabase-real` (see
+   REAL_SUPABASE_VERIFICATION.md). Until it has been run on a dedicated test project, Supabase RLS/grant behaviour and
+   real session minting are **unverified**.
 2. **Session minting is unverified.** After Quick Login succeeds, a session is created via `auth.admin.generateLink` +
-   `verifyOtp`. Not exercised against GoTrue. It requires the customer's auth user to have an email (real or an
-   internal placeholder — a decision for the account-creation phase).
+   `verifyOtp`. Only exercised against a fake. It requires the customer's auth user to have an email (real or an
+   internal placeholder, a decision for the account-creation phase). Sessions minted this way carry the `otp`
+   authentication method, not `password`.
 3. **CSP allows `'unsafe-inline'` scripts/styles** because the framework injects inline bootstrap scripts. XSS is
-   therefore mitigated by React escaping, not by CSP. Nonce-based CSP is future work. The production CSP also allows Google Fonts (used by the existing root layout). It was
-   **not exercised in a browser** (the dev server omits CSP/HSTS by design; `vite preview` cannot serve this Cloudflare-style
-   build), so any other external resource added later must be allow-listed, and the header should be checked on a deployed preview.
+   therefore mitigated by React escaping, not by CSP. Nonce-based CSP is future work. The production CSP also allows
+   Google Fonts (used by the existing root layout). **Exercised in a real browser** against the production build in
+   workerd (`bun run test:browser`): no CSP violation, hydration works, framing is refused. That run found and fixed a
+   defect: production mode was keyed on `process.env.NODE_ENV`, which does not exist in the Workers runtime, so CSP and
+   HSTS were **silently absent** from the deployed bundle; it is now `import.meta.env.DEV`-based. The external font hosts
+   were not reachable from the test sandbox (network, not CSP). Any other external resource added later must be allow-listed.
 4. **Sessions live in browser storage** (Supabase default). XSS ⇒ session theft. CSRF is handled by the framework's
    cross-origin check on server functions plus Bearer-token auth (cookies are not used for auth).
 5. **`frame-ancestors 'none'` by default**: the Lovable preview iframe (or any embed) needs `CSP_FRAME_ANCESTORS`.
@@ -49,17 +55,21 @@ migrations were restored afterwards.
 9. **DST gaps**: if the configured cut-off falls inside a spring-forward gap, local-time comparison follows PostgreSQL's
    `AT TIME ZONE` resolution; behaviour at that single instant was not separately specified.
 10. **Committed `.env` in git history** from before Phase 0 contains publishable values only; history was not rewritten.
-    Rotate keys if in doubt.
-11. **Secret Access Code length** (8–128) and the Argon2 parameters are engineering defaults.
+    Rotate keys if in doubt. The production build needs `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` at build time.
+11. **Supabase public sign-ups must be disabled** in the project (external setting, not enforceable from migrations).
+12. **Argon2 parameters** are an engineering choice (Workers cannot run native Argon2/bcrypt at useful cost); the
+    minimum Secret Access Code length is now owner-configured, not a built-in value.
 
 ## Owner decisions still required (nothing below was decided by the code)
 
 - Commission: period membership rule (timestamp vs business day), actual weekly period windows and payout times (none
   seeded), rounding mode (chosen at setup).
-- Approval of the **permission catalogue** (26 keys, in migration 04) and which are administrator-only.
+- Approval of the **permission catalogue** (26 keys, in migration 04, kept as a proposal) and which are administrator-only.
 - Whether `SETUP_TOKEN` is an acceptable first-admin gate.
 - Whether pending/rejected/suspended accounts may sign in (currently: only `approved` can Quick Login).
-- Lockout policy (currently 5 failures → 15 min), rate limits, minimum Secret Access Code length.
-- Mobile format (currently E.164 only), cut-off must be after 00:00, weekly windows cannot wrap Sunday→Monday.
+- Lockout policy, quick-login rate limits and minimum Secret Access Code length are **owner-configured at setup** (no
+  built-in values); the owner must choose them. The `/setup` throttle is deployer-configured.
+- Accepted mobile input formats / default country code (only canonical E.164 is _stored_); whether a 00:00 cut-off means
+  "no cut-off" (it is currently applied literally); weekly commission windows cannot wrap Sunday→Monday.
 - Payment provider; notification providers; privacy policy / terms text and consent wording.
 - Legal review: POPIA, cannabis regulation, age verification, consent, record retention.

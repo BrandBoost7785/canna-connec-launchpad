@@ -20,7 +20,7 @@ export default defineConfig({
           name: "unit",
           environment: "node",
           include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],
-          exclude: ["tests/db/**", "node_modules/**"],
+          exclude: ["tests/db/**", "tests/supabase-real/**", "node_modules/**"],
           // Unit tests must never talk to a real backend or read local .env secrets.
           env: { SUPABASE_URL: "", SUPABASE_SERVICE_ROLE_KEY: "" },
         },

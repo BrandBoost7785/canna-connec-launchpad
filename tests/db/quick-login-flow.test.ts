@@ -1,6 +1,13 @@
 import type pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestDb, type TestDb } from "./harness";
+import { createTestDb, TEST_SETTINGS, type TestDb } from "./harness";
+
+// Values come from the configured (TEST FIXTURE) policy stored in the database.
+const POLICY = {
+  maxFailedAttempts: TEST_SETTINGS.login_max_failed_attempts,
+  perIpLimit: TEST_SETTINGS.rate_limit_login_ip_attempts,
+  perCodeLimit: TEST_SETTINGS.rate_limit_login_code_attempts,
+};
 import { hashSecretCode } from "../../src/lib/security/secret-code";
 
 // End-to-end test of the server-side Client Code + Secret Access Code flow
@@ -64,7 +71,6 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 vi.mock("@tanstack/react-start/server", () => ({ getRequestHeader: () => h.ip }));
 
-import { AUTH_POLICY } from "../../src/server/auth-policy";
 import { quickLogin } from "../../src/server/quick-login.server";
 
 let db: TestDb;
@@ -136,7 +142,7 @@ describe("quick login flow (real PostgreSQL)", () => {
 
   it("locks after the configured failures: even the CORRECT secret is then refused, without revealing the lock", async () => {
     const c = await customer("lockme");
-    for (let i = 0; i < AUTH_POLICY.maxFailedAttempts; i++)
+    for (let i = 0; i < POLICY.maxFailedAttempts; i++)
       await expect(attempt(c.code, `wrong-secret-${i}`)).rejects.toMatchObject(generic);
     const row = (
       await db.su.query(
@@ -144,7 +150,7 @@ describe("quick login flow (real PostgreSQL)", () => {
         [c.id],
       )
     ).rows[0];
-    expect(row.failed_attempts).toBe(AUTH_POLICY.maxFailedAttempts);
+    expect(row.failed_attempts).toBe(POLICY.maxFailedAttempts);
     expect(row.locked_until).not.toBeNull();
     await expect(attempt(c.code, SECRET)).rejects.toMatchObject(generic);
     // an expired lock works again
@@ -164,7 +170,7 @@ describe("quick login flow (real PostgreSQL)", () => {
 
   it("the lockout event is audited and contains no secret material", async () => {
     const c = await customer("auditlock");
-    for (let i = 0; i < AUTH_POLICY.maxFailedAttempts; i++)
+    for (let i = 0; i < POLICY.maxFailedAttempts; i++)
       await attempt(c.code, `nope-${i}-xxxxx`).catch(() => {});
     const a = (
       await db.su.query(
@@ -179,7 +185,7 @@ describe("quick login flow (real PostgreSQL)", () => {
   it("rate-limits per IP regardless of which codes are tried", async () => {
     h.ip = "203.0.113.50";
     let limited = 0;
-    for (let i = 0; i < AUTH_POLICY.perIpQuickLogin.limit + 3; i++) {
+    for (let i = 0; i < POLICY.perIpLimit + 3; i++) {
       try {
         const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         await attempt(`AAAA-AAAA-AAA${alphabet[i]}`, SECRET);
@@ -193,7 +199,7 @@ describe("quick login flow (real PostgreSQL)", () => {
   it("rate-limits per Client Code across different IPs", async () => {
     const c = await customer("codelimit");
     let limited = 0;
-    for (let i = 0; i < AUTH_POLICY.perClientCodeQuickLogin.limit + 2; i++) {
+    for (let i = 0; i < POLICY.perCodeLimit + 2; i++) {
       h.ip = `192.0.2.${i + 1}`;
       try {
         await attempt(c.code, "definitely-wrong-1");
@@ -210,5 +216,41 @@ describe("quick login flow (real PostgreSQL)", () => {
       .join("\n");
     expect(keys).toMatch(/ql-ip:[0-9a-f]{64}/);
     expect(keys).not.toMatch(/198\.51\.100|203\.0\.113|AAAA-AAAA/);
+  });
+});
+
+describe("quick login fails closed while the owner has not configured the security policy", () => {
+  it("refuses with configuration_required, without touching the lockout counter or rate limiter", async () => {
+    const fresh = await createTestDb(); // migrated but NEVER configured: policy columns are NULL
+    const prevSu = h.su;
+    const prevSvc = h.svc;
+    h.su = fresh.su;
+    h.svc = await fresh.as("service_role");
+    try {
+      const id = await fresh.createProfile("customer", "unconfigured");
+      await fresh.su.query("update auth.users set email = 'u@example.invalid' where id = $1", [id]);
+      const code = (await h.svc.query("select public.issue_client_code($1) c", [id])).rows[0]
+        .c as string;
+      await h.svc.query("select public.set_access_secret($1, $2)", [id, hashSecretCode(SECRET)]);
+      await fresh.su.query("update public.profiles set status = 'approved' where id = $1", [id]);
+      await expect(attempt(code, SECRET)).rejects.toMatchObject({
+        code: "configuration_required",
+      });
+      await expect(attempt(code, "wrong-secret-xyz")).rejects.toMatchObject({
+        code: "configuration_required",
+      });
+      const row = (
+        await fresh.su.query(
+          "select failed_attempts from public.access_credentials where user_id = $1",
+          [id],
+        )
+      ).rows[0];
+      expect(row.failed_attempts).toBe(0);
+      expect((await fresh.su.query("select 1 from public.rate_limits")).rowCount).toBe(0);
+    } finally {
+      h.su = prevSu;
+      h.svc = prevSvc;
+      await fresh.close();
+    }
   });
 });

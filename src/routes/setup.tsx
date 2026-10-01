@@ -33,6 +33,13 @@ const EMPTY: Fields = {
   hideAfterMinutes: "",
   rateBps: "",
   rounding: "",
+  maxFailed: "",
+  lockSeconds: "",
+  ipAttempts: "",
+  ipWindow: "",
+  codeAttempts: "",
+  codeWindow: "",
+  secretMinLength: "",
 };
 
 const toInt = (v: string) => (v.trim() === "" ? Number.NaN : Number(v));
@@ -75,6 +82,13 @@ function SetupPage() {
         availability_check_minutes: toInt(f["availabilityMinutes"] ?? ""),
         hide_out_of_stock_enabled: hideOos === "yes",
         hide_out_of_stock_after_minutes: toInt(f["hideAfterMinutes"] ?? ""),
+        login_max_failed_attempts: toInt(f["maxFailed"] ?? ""),
+        login_lock_seconds: toInt(f["lockSeconds"] ?? ""),
+        rate_limit_login_ip_attempts: toInt(f["ipAttempts"] ?? ""),
+        rate_limit_login_ip_window_seconds: toInt(f["ipWindow"] ?? ""),
+        rate_limit_login_code_attempts: toInt(f["codeAttempts"] ?? ""),
+        rate_limit_login_code_window_seconds: toInt(f["codeWindow"] ?? ""),
+        secret_code_min_length: toInt(f["secretMinLength"] ?? ""),
       },
       commission: { rateBps: toInt(f["rateBps"] ?? ""), rounding: f["rounding"] },
       notificationChannels: [],
@@ -127,7 +141,7 @@ function SetupPage() {
               autoComplete="off"
             />
           </Field>
-          <Field label="Password (min 8 characters)">
+          <Field label="Password (must satisfy the password policy of the authentication service)">
             <Input
               type="password"
               value={f["adminPassword"]}
@@ -185,6 +199,33 @@ function SetupPage() {
               inputMode="numeric"
               value={f["hideAfterMinutes"]}
               onChange={set("hideAfterMinutes")}
+            />
+          </Field>
+        </Section>
+        <Section title="Sign-in security policy (owner decision, no defaults)">
+          <Field label="Failed Secret Access Code attempts before the account is locked">
+            <Input inputMode="numeric" value={f["maxFailed"]} onChange={set("maxFailed")} />
+          </Field>
+          <Field label="Lock duration (seconds)">
+            <Input inputMode="numeric" value={f["lockSeconds"]} onChange={set("lockSeconds")} />
+          </Field>
+          <Field label="Quick-login attempts allowed per IP address per window">
+            <Input inputMode="numeric" value={f["ipAttempts"]} onChange={set("ipAttempts")} />
+          </Field>
+          <Field label="…window length for the per-IP limit (seconds)">
+            <Input inputMode="numeric" value={f["ipWindow"]} onChange={set("ipWindow")} />
+          </Field>
+          <Field label="Quick-login attempts allowed per Client Code per window">
+            <Input inputMode="numeric" value={f["codeAttempts"]} onChange={set("codeAttempts")} />
+          </Field>
+          <Field label="…window length for the per-Client-Code limit (seconds)">
+            <Input inputMode="numeric" value={f["codeWindow"]} onChange={set("codeWindow")} />
+          </Field>
+          <Field label="Minimum Secret Access Code length (characters)">
+            <Input
+              inputMode="numeric"
+              value={f["secretMinLength"]}
+              onChange={set("secretMinLength")}
             />
           </Field>
         </Section>

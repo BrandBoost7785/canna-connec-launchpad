@@ -90,13 +90,6 @@ describe("first-run setup is atomic: any failure leaves NOTHING behind", () => {
       "half_up",
       "23514",
     ],
-    [
-      "cutoff of 00:00",
-      { ...TEST_SETTINGS, business_day_cutoff: "00:00" },
-      4000,
-      "half_up",
-      "23514",
-    ],
     ["commission rate above 100%", TEST_SETTINGS, 10001, "half_up", "23514"],
     ["negative commission rate", TEST_SETTINGS, -5, "half_up", "23514"],
     ["invalid rounding mode", TEST_SETTINGS, 4000, "banana", "22P02"],

@@ -168,10 +168,10 @@ describe("secrets never reach the audit log", () => {
     const svc = await db.as("service_role");
     await svc.query("select public.set_access_secret($1, $2)", [cust, MARKER]);
     const before = await total();
-    await svc.query("select public.record_quick_login_attempt($1, false, 3, 600)", [cust]);
-    await svc.query("select public.record_quick_login_attempt($1, false, 3, 600)", [cust]);
+    await svc.query("select public.record_quick_login_attempt($1, false)", [cust]);
+    await svc.query("select public.record_quick_login_attempt($1, false)", [cust]);
     expect(await total()).toBe(before);
-    await svc.query("select public.record_quick_login_attempt($1, false, 3, 600)", [cust]);
+    await svc.query("select public.record_quick_login_attempt($1, false)", [cust]);
     const row = await latest("credential.quick_login_locked");
     expect(row.actor_id).toBe(cust);
     expect(row.new_value.failed_attempts).toBe(3);

@@ -4,6 +4,8 @@ import {
   currencyCodeSchema,
   firstRunSetupSchema,
   isValidTimeZone,
+  MAX_SECRET_CODE_LENGTH,
+  secretCodeSchemaFor,
   mobileE164Schema,
   passwordLoginSchema,
   quickLoginSchema,
@@ -28,6 +30,14 @@ const validSetup = () => ({
     availability_check_minutes: 5,
     hide_out_of_stock_enabled: true,
     hide_out_of_stock_after_minutes: 60,
+    // security policy: TEST FIXTURE values only
+    login_max_failed_attempts: 3,
+    login_lock_seconds: 900,
+    rate_limit_login_ip_attempts: 20,
+    rate_limit_login_ip_window_seconds: 600,
+    rate_limit_login_code_attempts: 10,
+    rate_limit_login_code_window_seconds: 900,
+    secret_code_min_length: 8,
   },
   commission: { rateBps: 1000, rounding: "half_up" },
   notificationChannels: [],
@@ -73,16 +83,29 @@ describe("primitive validators", () => {
 });
 
 describe("login schemas", () => {
-  it("quick login needs a well-formed code and a secret of at least 8 characters", () => {
+  it("quick login needs a well-formed code and a non-empty bounded secret (NO minimum length at login)", () => {
     expect(
-      quickLoginSchema.safeParse({ clientCode: "7K2M-9XQ4-HH3P", secretCode: "12345678" }).success,
+      quickLoginSchema.safeParse({ clientCode: "7K2M-9XQ4-HH3P", secretCode: "x" }).success,
     ).toBe(true);
     expect(
-      quickLoginSchema.safeParse({ clientCode: "7K2M-9XQ4-HH3P", secretCode: "1234567" }).success,
+      quickLoginSchema.safeParse({ clientCode: "7K2M-9XQ4-HH3P", secretCode: "" }).success,
+    ).toBe(false);
+    expect(
+      quickLoginSchema.safeParse({
+        clientCode: "7K2M-9XQ4-HH3P",
+        secretCode: "x".repeat(MAX_SECRET_CODE_LENGTH + 1),
+      }).success,
     ).toBe(false);
     expect(quickLoginSchema.safeParse({ clientCode: "bad", secretCode: "12345678" }).success).toBe(
       false,
     );
+  });
+  it("secret creation uses the OWNER-configured minimum and has no built-in default", () => {
+    expect(secretCodeSchemaFor(12).safeParse("x".repeat(11)).success).toBe(false);
+    expect(secretCodeSchemaFor(12).safeParse("x".repeat(12)).success).toBe(true);
+    expect(secretCodeSchemaFor(1).safeParse("x").success).toBe(true);
+    for (const bad of [0, -1, 1.5, 129, Number.NaN, undefined as unknown as number])
+      expect(() => secretCodeSchemaFor(bad)).toThrow();
   });
   it("rejects unknown keys, so a client cannot smuggle in extra fields such as a role", () => {
     const r = quickLoginSchema.safeParse({
@@ -125,6 +148,16 @@ describe("first-run setup schema", () => {
         false,
       );
     }
+    for (const key of [
+      "login_max_failed_attempts",
+      "login_lock_seconds",
+      "rate_limit_login_ip_attempts",
+      "rate_limit_login_ip_window_seconds",
+      "rate_limit_login_code_attempts",
+      "rate_limit_login_code_window_seconds",
+      "secret_code_min_length",
+    ])
+      expect(Object.keys(validSetup().settings)).toContain(key);
     const noCommission = validSetup() as Record<string, unknown>;
     delete noCommission["commission"];
     expect(firstRunSetupSchema.safeParse(noCommission).success).toBe(false);
@@ -166,8 +199,11 @@ describe("first-run setup schema", () => {
     const a = validSetup();
     (a.commission as Record<string, unknown>)["rounding"] = "banana";
     expect(firstRunSetupSchema.safeParse(a).success).toBe(false);
+    // password strength is the authentication service's policy, not invented here
     const b = validSetup();
-    b.admin.password = "short";
+    b.admin.password = "";
+    expect(firstRunSetupSchema.safeParse(b).success).toBe(false);
+    b.admin.password = "x".repeat(129);
     expect(firstRunSetupSchema.safeParse(b).success).toBe(false);
   });
 });

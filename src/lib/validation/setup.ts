@@ -35,6 +35,15 @@ export const setupSettingsSchema = z
     availability_check_minutes: z.number().int().min(0).max(1440),
     hide_out_of_stock_enabled: z.boolean(),
     hide_out_of_stock_after_minutes: z.number().int().min(0).max(525_600),
+    // Owner-configured security policy: required, no defaults. The bounds equal the
+    // database CHECK constraints (technical sanity limits, not policy).
+    login_max_failed_attempts: z.number().int().min(1).max(100),
+    login_lock_seconds: z.number().int().min(1).max(86_400),
+    rate_limit_login_ip_attempts: z.number().int().min(1).max(100_000),
+    rate_limit_login_ip_window_seconds: z.number().int().min(1).max(86_400),
+    rate_limit_login_code_attempts: z.number().int().min(1).max(100_000),
+    rate_limit_login_code_window_seconds: z.number().int().min(1).max(86_400),
+    secret_code_min_length: z.number().int().min(1).max(128),
   })
   .strict();
 

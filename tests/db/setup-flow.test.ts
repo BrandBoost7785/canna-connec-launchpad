@@ -53,6 +53,7 @@ vi.mock("@/integrations/supabase/client.server", () => ({
 vi.mock("@tanstack/react-start/server", () => ({ getRequestHeader: () => h.ip }));
 
 import { completeFirstRunSetup } from "../../src/server/setup.server";
+import { TEST_SETTINGS } from "./harness";
 import type { FirstRunSetupInput } from "../../src/lib/validation";
 
 const TOKEN = "setup-token-for-tests-".padEnd(40, "x");
@@ -69,6 +70,13 @@ const input = (email: string, token = TOKEN): FirstRunSetupInput => ({
     availability_check_minutes: 5,
     hide_out_of_stock_enabled: true,
     hide_out_of_stock_after_minutes: 60,
+    login_max_failed_attempts: TEST_SETTINGS.login_max_failed_attempts,
+    login_lock_seconds: TEST_SETTINGS.login_lock_seconds,
+    rate_limit_login_ip_attempts: TEST_SETTINGS.rate_limit_login_ip_attempts,
+    rate_limit_login_ip_window_seconds: TEST_SETTINGS.rate_limit_login_ip_window_seconds,
+    rate_limit_login_code_attempts: TEST_SETTINGS.rate_limit_login_code_attempts,
+    rate_limit_login_code_window_seconds: TEST_SETTINGS.rate_limit_login_code_window_seconds,
+    secret_code_min_length: TEST_SETTINGS.secret_code_min_length,
   },
   commission: { rateBps: 1000, rounding: "half_up" },
   notificationChannels: [{ channel: "email", enabled: false }],
@@ -83,6 +91,9 @@ beforeAll(async () => {
   h.svc = await db.as("service_role");
   vi.stubEnv("RATE_LIMIT_KEY_SECRET", "r".repeat(48));
   vi.stubEnv("CLIENT_IP_HEADER", "x-test-client-ip");
+  // TEST FIXTURE deployment values for the setup endpoint's throttle (no built-in default).
+  vi.stubEnv("SETUP_RATE_LIMIT_ATTEMPTS", "10");
+  vi.stubEnv("SETUP_RATE_LIMIT_WINDOW_SECONDS", "3600");
 });
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -103,6 +114,33 @@ describe("first-run setup flow (real PostgreSQL)", () => {
     await expect(completeFirstRunSetup(input("a@example.invalid", "short"))).rejects.toMatchObject({
       code: "configuration_required",
     });
+    expect(await count("select count(*)::int n from auth.users")).toBe(0);
+  });
+
+  it("is disabled until the deployment configures the setup throttle (no built-in default)", async () => {
+    vi.stubEnv("SETUP_TOKEN", TOKEN);
+    for (const [k, v] of [
+      ["SETUP_RATE_LIMIT_ATTEMPTS", ""],
+      ["SETUP_RATE_LIMIT_WINDOW_SECONDS", "0"],
+      ["SETUP_RATE_LIMIT_ATTEMPTS", "abc"],
+    ] as const) {
+      vi.stubEnv("SETUP_RATE_LIMIT_ATTEMPTS", "10");
+      vi.stubEnv("SETUP_RATE_LIMIT_WINDOW_SECONDS", "3600");
+      vi.stubEnv(k, v);
+      await expect(completeFirstRunSetup(input("t@example.invalid"))).rejects.toMatchObject({
+        code: "configuration_required",
+      });
+    }
+    vi.stubEnv("SETUP_RATE_LIMIT_ATTEMPTS", "10");
+    vi.stubEnv("SETUP_RATE_LIMIT_WINDOW_SECONDS", "3600");
+    expect(await count("select count(*)::int n from auth.users")).toBe(0);
+  });
+
+  it("rejects a setup submission that omits any owner security-policy value (database level)", async () => {
+    vi.stubEnv("SETUP_TOKEN", TOKEN);
+    const bad = input("p@example.invalid");
+    delete (bad.settings as Record<string, unknown>)["login_lock_seconds"];
+    await expect(completeFirstRunSetup(bad)).rejects.toMatchObject({ code: "invalid_input" });
     expect(await count("select count(*)::int n from auth.users")).toBe(0);
   });
 

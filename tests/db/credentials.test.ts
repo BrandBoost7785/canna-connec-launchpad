@@ -187,7 +187,7 @@ describe("Secret Access Codes (stored only as a hash)", () => {
         `${role} set`,
       ).toBe("42501");
       expect(
-        await sqlState(c, "select public.record_quick_login_attempt($1, true, 5, 60)", [cust]),
+        await sqlState(c, "select public.record_quick_login_attempt($1, true)", [cust]),
         `${role} record`,
       ).toBe("42501");
       expect(
@@ -199,14 +199,12 @@ describe("Secret Access Codes (stored only as a hash)", () => {
 
   it("locks after the configured number of failures, and a success clears the counter", async () => {
     await svc.query("select public.set_access_secret($1, $2)", [cust, HASH]);
-    const a = (
-      await svc.query("select public.record_quick_login_attempt($1, false, 3, 900) r", [cust])
-    ).rows[0].r;
+    const a = (await svc.query("select public.record_quick_login_attempt($1, false) r", [cust]))
+      .rows[0].r;
     expect(a).toMatchObject({ failed_attempts: 1, locked_until: null });
-    await svc.query("select public.record_quick_login_attempt($1, false, 3, 900)", [cust]);
-    const c = (
-      await svc.query("select public.record_quick_login_attempt($1, false, 3, 900) r", [cust])
-    ).rows[0].r;
+    await svc.query("select public.record_quick_login_attempt($1, false)", [cust]);
+    const c = (await svc.query("select public.record_quick_login_attempt($1, false) r", [cust]))
+      .rows[0].r;
     expect(c.failed_attempts).toBe(3);
     const lockedUntil = new Date(c.locked_until).getTime();
     expect(lockedUntil).toBeGreaterThan(Date.now() + 800_000);
@@ -216,7 +214,7 @@ describe("Secret Access Codes (stored only as a hash)", () => {
     ]);
     expect(look.rows[0].locked_until).not.toBeNull();
 
-    await svc.query("select public.record_quick_login_attempt($1, true, 3, 900)", [cust]);
+    await svc.query("select public.record_quick_login_attempt($1, true)", [cust]);
     const after = (
       await db.su.query(
         "select failed_attempts, locked_until, last_success_at from public.access_credentials where user_id = $1",
@@ -230,7 +228,7 @@ describe("Secret Access Codes (stored only as a hash)", () => {
 
   it("rotating the secret clears any lock", async () => {
     for (let i = 0; i < 3; i++)
-      await svc.query("select public.record_quick_login_attempt($1, false, 3, 900)", [cust]);
+      await svc.query("select public.record_quick_login_attempt($1, false)", [cust]);
     await svc.query("select public.set_access_secret($1, $2)", [cust, HASH + "x"]);
     const r = (
       await db.su.query(
@@ -241,22 +239,41 @@ describe("Secret Access Codes (stored only as a hash)", () => {
     expect(r).toEqual({ failed_attempts: 0, locked_until: null });
   });
 
-  it("validates attempt parameters and unknown users", async () => {
-    expect(
-      await sqlState(svc, "select public.record_quick_login_attempt($1, false, 0, 60)", [cust]),
-    ).toBe("22023");
-    expect(
-      await sqlState(svc, "select public.record_quick_login_attempt($1, false, 5, 0)", [cust]),
-    ).toBe("22023");
-    expect(
-      await sqlState(svc, "select public.record_quick_login_attempt($1, null, 5, 60)", [cust]),
-    ).toBe("22023");
+  it("validates its arguments and unknown users", async () => {
+    expect(await sqlState(svc, "select public.record_quick_login_attempt($1, null)", [cust])).toBe(
+      "22023",
+    );
+    expect(await sqlState(svc, "select public.record_quick_login_attempt(null, false)")).toBe(
+      "22023",
+    );
     expect(
       await sqlState(
         svc,
-        "select public.record_quick_login_attempt('00000000-0000-0000-0000-000000000000', false, 5, 60)",
+        "select public.record_quick_login_attempt('00000000-0000-0000-0000-000000000000', false)",
       ),
     ).toBe("P0002");
+  });
+
+  it("takes lockout limits ONLY from the owner's configuration, never from the caller", async () => {
+    // the old four-argument form (caller-supplied limits) no longer exists
+    expect(
+      await sqlState(svc, "select public.record_quick_login_attempt($1, false, 1000, 1)", [cust]),
+    ).toBe("42883");
+    // changing the configured policy changes behaviour
+    const admin = (await db.su.query("select id from public.profiles where kind='admin'")).rows[0]
+      .id;
+    const ac = await db.asNew("authenticated", admin);
+    await ac.query(
+      `select public.admin_update_business_settings('{"login_max_failed_attempts":1}')`,
+    );
+    const victim = await db.createProfile("customer", "policy-victim");
+    await svc.query("select public.set_access_secret($1, $2)", [victim, HASH]);
+    const r = (await svc.query("select public.record_quick_login_attempt($1, false) r", [victim]))
+      .rows[0].r;
+    expect(r.locked_until).not.toBeNull();
+    await ac.query(
+      `select public.admin_update_business_settings('{"login_max_failed_attempts":3}')`,
+    );
   });
 
   it("only applies to live accounts: an archived customer cannot be looked up", async () => {
@@ -272,9 +289,7 @@ describe("Secret Access Codes (stored only as a hash)", () => {
     await svc.query("select public.set_access_secret($1, $2)", [victim, HASH]);
     const clients = await Promise.all(Array.from({ length: 12 }, () => db.asNew("service_role")));
     await Promise.all(
-      clients.map((c) =>
-        c.query("select public.record_quick_login_attempt($1, false, 100, 60)", [victim]),
-      ),
+      clients.map((c) => c.query("select public.record_quick_login_attempt($1, false)", [victim])),
     );
     const r = (
       await db.su.query(

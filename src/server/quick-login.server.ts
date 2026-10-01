@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { AppError } from "@/lib/errors";
 import { dummyVerify, verifySecretCode } from "@/lib/security/secret-code";
 import type { QuickLoginInput } from "@/lib/validation";
-import { AUTH_POLICY } from "./auth-policy";
+import { getSecurityPolicy } from "./security-policy.server";
 import { getClientIp } from "./request-context.server";
 import { enforceRateLimit } from "./rate-limit.server";
 import { adminRpc } from "./rpc.server";
@@ -29,8 +29,16 @@ const fail = (): never => {
 };
 
 export async function quickLogin(input: QuickLoginInput): Promise<SessionTokens> {
-  await enforceRateLimit("ql-ip", getClientIp(), AUTH_POLICY.perIpQuickLogin);
-  await enforceRateLimit("ql-code", input.clientCode, AUTH_POLICY.perClientCodeQuickLogin);
+  // Owner-configured policy; fails closed (configuration_required) while unconfigured.
+  const policy = await getSecurityPolicy();
+  await enforceRateLimit("ql-ip", getClientIp(), {
+    limit: policy.rate_limit_login_ip_attempts,
+    windowSeconds: policy.rate_limit_login_ip_window_seconds,
+  });
+  await enforceRateLimit("ql-code", input.clientCode, {
+    limit: policy.rate_limit_login_code_attempts,
+    windowSeconds: policy.rate_limit_login_code_window_seconds,
+  });
 
   const rows = await adminRpc<Credential[]>("get_quick_login_credential", {
     p_client_code: input.clientCode,
@@ -45,12 +53,8 @@ export async function quickLogin(input: QuickLoginInput): Promise<SessionTokens>
 
   // DECISION PENDING (owner): only approved accounts may sign in.
   const ok = matches && cred.status === "approved";
-  await adminRpc("record_quick_login_attempt", {
-    p_user_id: cred.user_id,
-    p_success: ok,
-    p_max_failures: AUTH_POLICY.maxFailedAttempts,
-    p_lock_seconds: AUTH_POLICY.lockSeconds,
-  });
+  // Lockout threshold/duration are read from the configured policy inside the database.
+  await adminRpc("record_quick_login_attempt", { p_user_id: cred.user_id, p_success: ok });
   if (!ok) return fail();
 
   return mintSession(cred.user_id);

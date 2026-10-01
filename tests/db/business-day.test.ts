@@ -84,9 +84,10 @@ describe("business day cutoff (pure function, explicit timezone + cutoff)", () =
     expect(await sqlState(db.su, "select app.business_day_of(now(), 'Not/AZone', '20:00')")).toBe(
       "22023",
     );
+    // A 00:00 cut-off is not rejected: the rule is applied literally (see migration 10).
     expect(
       await sqlState(db.su, "select app.business_day_of(now(), 'Africa/Johannesburg', '00:00')"),
-    ).toBe("22023");
+    ).toBeNull();
   });
 });
 
@@ -187,7 +188,7 @@ describe("configured business day (reads settings; never the client clock)", () 
     expect(await sqlState(anon, "select public.current_business_day()")).toBe("42501");
   });
 
-  it("refuses an invalid timezone or a 00:00 cutoff at the settings level", async () => {
+  it("refuses an invalid timezone at the settings level", async () => {
     const adminId = (await db.su.query("select id from public.profiles where kind='admin'")).rows[0]
       .id;
     const c = await db.as("authenticated", adminId);
@@ -197,11 +198,27 @@ describe("configured business day (reads settings; never the client clock)", () 
         `select public.admin_update_business_settings('{"timezone":"Mars/Olympus"}')`,
       ),
     ).toBe("23514");
-    expect(
-      await sqlState(
-        c,
-        `select public.admin_update_business_settings('{"business_day_cutoff":"00:00"}')`,
-      ),
-    ).toBe("23514");
+  });
+
+  it("does not impose an invented rule on the cut-off: 00:00 is accepted and applied literally", async () => {
+    const adminId = (await db.su.query("select id from public.profiles where kind='admin'")).rows[0]
+      .id;
+    const c = await db.asNew("authenticated", adminId);
+    await c.query(
+      `select public.admin_update_business_settings('{"business_day_cutoff":"00:00"}')`,
+    );
+    // every instant is at/after 00:00 local, so it belongs to the next calendar day
+    const r = await c.query(
+      "select public.business_day_for('2026-03-10T10:00:00+02'::timestamptz)::text d",
+    );
+    expect(r.rows[0].d).toBe("2026-03-11");
+    const bounds = await db.su.query(
+      "select starts_at, ends_at from app.business_day_bounds_of('2026-03-11', 'Africa/Johannesburg', '00:00')",
+    );
+    expect(new Date(bounds.rows[0].starts_at).toISOString()).toBe("2026-03-09T22:00:00.000Z");
+    expect(new Date(bounds.rows[0].ends_at).toISOString()).toBe("2026-03-10T22:00:00.000Z");
+    await c.query(
+      `select public.admin_update_business_settings('{"business_day_cutoff":"20:00"}')`,
+    );
   });
 });

@@ -15,7 +15,10 @@
     "test:watch": "vitest",
     "format:check": "prettier --check .",
     "test:db": "vitest run --project db",
-    "test:all": "vitest run"
+    "test:all": "vitest run",
+    "test:browser": "bun tests/browser/browser-check.ts",
+    "test:supabase:migrate": "bun tests/supabase-real/apply-migrations.ts",
+    "test:supabase": "vitest run --config vitest.supabase.config.ts"
   },
   "overrides": {
     "rolldown": "1.2.1"

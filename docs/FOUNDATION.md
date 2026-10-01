@@ -17,16 +17,17 @@ service-role client (`src/server/*.server.ts`). **All authorization is decided i
 
 Names only are tracked in `.env.example`. Real values live in your environment / secret manager.
 
-| Variable                                                          | Scope           | Purpose                                                                                      |
-| ----------------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------- |
-| `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID` | server          | Project URL and publishable key                                                              |
-| `VITE_SUPABASE_*`                                                 | browser-safe    | Same public values for the browser client                                                    |
-| `SUPABASE_SERVICE_ROLE_KEY`                                       | **server only** | Bypasses RLS. Used only in `src/server/*.server.ts`. Verified absent from the client bundle. |
-| `SETUP_TOKEN`                                                     | **server only** | ≥32 chars. Required to submit `/setup`; setup is disabled while unset.                       |
-| `RATE_LIMIT_KEY_SECRET`                                           | **server only** | ≥32 chars. HMAC key for rate-limit keys. Login/setup **fail closed** if missing.             |
-| `CLIENT_IP_HEADER`                                                | server          | Header your trusted proxy sets with the real client IP. Unset ⇒ one shared bucket.           |
-| `CSP_FRAME_ANCESTORS`                                             | server          | Origins allowed to frame the site (default `'none'`).                                        |
-| `LOVABLE_CRON_SECRET(_PREVIOUS)`                                  | **server only** | Existing cron authentication (unchanged).                                                    |
+| Variable                                                          | Scope           | Purpose                                                                                                                                        |
+| ----------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID` | server          | Project URL and publishable key                                                                                                                |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`              | browser-safe    | Same public values for the browser client. **Needed at BUILD time**; without them every server-function call from the browser fails.           |
+| `SUPABASE_SERVICE_ROLE_KEY`                                       | **server only** | Bypasses RLS. Used only in `src/server/*.server.ts`. Verified absent from the client bundle.                                                   |
+| `SETUP_TOKEN`                                                     | **server only** | ≥32 chars. Required to submit `/setup`; setup is disabled while unset.                                                                         |
+| `RATE_LIMIT_KEY_SECRET`                                           | **server only** | ≥32 chars. HMAC key for rate-limit keys. Login/setup **fail closed** if missing.                                                               |
+| `SETUP_RATE_LIMIT_ATTEMPTS`, `SETUP_RATE_LIMIT_WINDOW_SECONDS`    | server          | Deployer-chosen throttle for `/setup` (positive integers). **No built-in default**: setup fails closed (`configuration_required`) while unset. |
+| `CLIENT_IP_HEADER`                                                | server          | Header your trusted proxy sets with the real client IP. Unset ⇒ one shared bucket.                                                             |
+| `CSP_FRAME_ANCESTORS`                                             | server          | Origins allowed to frame the site (default `'none'`).                                                                                          |
+| `LOVABLE_CRON_SECRET(_PREVIOUS)`                                  | **server only** | Existing cron authentication (unchanged).                                                                                                      |
 
 ## Supabase setup assumptions (external configuration)
 
@@ -39,22 +40,23 @@ Names only are tracked in `.env.example`. Real values live in your environment /
 
 ## Migrations
 
-`supabase/migrations/20260930120001…0009_foundation_*.sql`, applied in filename order (Supabase CLI convention: `supabase db push`
+`supabase/migrations/20260930120001…0010_foundation_*.sql`, applied in filename order (Supabase CLI convention: `supabase db push`
 or `supabase migration up` against **your dev/staging project first**). They contain **no fake business data**. The only
 rows they insert are system definitions: the `admin` system role and the permission catalogue (a **proposal** for owner
 review) plus the single empty `business_settings` row with `setup_completed_at = null`.
 
-| #   | File                   | Content                                                                                |
-| --- | ---------------------- | -------------------------------------------------------------------------------------- |
-| 01  | schemas_and_enums      | `app` schema (not API-exposed), enums                                                  |
-| 02  | audit                  | append-only `audit_logs`, `app.write_audit`, actor helpers                             |
-| 03  | settings_business_day  | `business_settings` singleton, notification channels, business-day functions           |
-| 04  | identity_rbac          | `profiles`, `roles`, `permissions`, `role_permissions`, `user_roles`, guard triggers   |
-| 05  | commission             | commission configuration (versioned), period schedules and periods, amount function    |
-| 06  | credentials_rate_limit | `client_codes`, `access_credentials` (hash only), `rate_limits`                        |
-| 07  | rpc                    | all `SECURITY DEFINER` API/service functions                                           |
-| 08  | audit_triggers         | audit triggers (secret hashes redacted)                                                |
-| 09  | rls_and_grants         | RLS policies and explicit `REVOKE`/`GRANT` for `anon`, `authenticated`, `service_role` |
+| #   | File                   | Content                                                                                                   |
+| --- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| 01  | schemas_and_enums      | `app` schema (not API-exposed), enums                                                                     |
+| 02  | audit                  | append-only `audit_logs`, `app.write_audit`, actor helpers                                                |
+| 03  | settings_business_day  | `business_settings` singleton, notification channels, business-day functions                              |
+| 04  | identity_rbac          | `profiles`, `roles`, `permissions`, `role_permissions`, `user_roles`, guard triggers                      |
+| 05  | commission             | commission configuration (versioned), period schedules and periods, amount function                       |
+| 06  | credentials_rate_limit | `client_codes`, `access_credentials` (hash only), `rate_limits`                                           |
+| 07  | rpc                    | all `SECURITY DEFINER` API/service functions                                                              |
+| 08  | audit_triggers         | audit triggers (secret hashes redacted)                                                                   |
+| 09  | rls_and_grants         | RLS policies and explicit `REVOKE`/`GRANT` for `anon`, `authenticated`, `service_role`                    |
+| 10  | configurable_policies  | Owner-configurable security policy columns (all NULL until setup), `get_security_policy`, DB-side lockout |
 
 Conventions: money is integer minor units; `timestamptz` everywhere; archive (`archived_at`) instead of delete; audit
 columns (`created_at`, `updated_at`, `created_by`…) on mutable tables. Error convention (SQLSTATE): `42501` forbidden,
@@ -116,12 +118,47 @@ on existing data, but the order matters and they are not designed to be re-appli
 (single-winner under a row lock). If the database rejects the submission the auth user is removed again. After success
 the route only reports "already completed".
 
+## Configurable values and who decides them
+
+The master specification text was never available to this implementation, so **no value below is "specification-defined"**.
+Earlier developer-chosen defaults were removed; nothing is seeded.
+
+**Owner-configured (stored in `business_settings`, required by first-run setup, editable only with `settings.manage` /
+`security_settings.manage`, both administrator-only, every change audited). While a value is NULL the dependent feature
+fails closed with `configuration_required`.**
+
+| Value                                                           | Setting key(s)                                                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Failed-attempt lockout threshold and lock duration              | `login_max_failed_attempts`, `login_lock_seconds`                                                |
+| Quick-login rate limits (per IP, per Client Code)               | `rate_limit_login_ip_attempts/_window_seconds`, `rate_limit_login_code_attempts/_window_seconds` |
+| Minimum Secret Access Code length (applies when one is set)     | `secret_code_min_length`                                                                         |
+| Business-day cut-off (00:00 is applied literally)               | `business_day_cutoff`                                                                            |
+| Cart reservation duration, stock thresholds, timezone, currency | the matching `business_settings` columns                                                         |
+| Commission rate and rounding; weekly commission windows         | `commission_configurations`, `commission_period_schedules` (none seeded)                         |
+
+**Deployer environment (required, no default):** `SETUP_RATE_LIMIT_ATTEMPTS`, `SETUP_RATE_LIMIT_WINDOW_SECONDS`.
+
+**Platform / security minimums (technical limits, not business policy):** bounds on the above (attempts 1–100, windows
+1–86 400 s), secrets and passwords capped at 128 characters (login accepts any non-empty secret so a policy change never locks
+existing customers out), Argon2id for secret hashing, ≥32-character `SETUP_TOKEN` / `RATE_LIMIT_KEY_SECRET`, and E.164 as the
+canonical _stored_ mobile format.
+
+**Unresolved (owner decision needed):** accepted customer mobile input formats and default country code; whether a 00:00
+cut-off should mean "no cut-off"; weekly commission windows cannot wrap Sunday→Monday (rejected with `23514`, fails closed);
+Supabase Auth password strength (external project configuration); approval of the permission catalogue below.
+
+**Permission catalogue:** exactly **26** keys (migration 04, `security_settings.manage` included; earlier notes said 25).
+They are a _proposal_: not added to, removed or renamed. `tests/db/policy-config.test.ts` pins the count. Only the system
+`admin` role exists on a fresh install; unknown or ungranted permission keys are denied.
+
 ## Testing
 
 ```sh
 bun run test      # unit tests (no DB, no secrets)
 bun run test:db   # REAL PostgreSQL 17 via embedded-postgres: migrations, RLS, functions, audit, flows
 bun run test:all  # both
+bun run test:browser   # production build in workerd + real headless Chromium (see below)
+bun run test:supabase  # REAL Supabase suite. NOT RUN YET; refuses unless explicitly configured
 ```
 
 `test:db` needs no installation beyond `bun install`: `tests/db/pg-server.mjs` starts a throw-away server (PostgreSQL
@@ -129,7 +166,15 @@ binaries from the `embedded-postgres` dev dependency; requires a **non-root** us
 random local port, builds one migrated template database and clones it per test file. Nothing touches an existing database.
 
 What the DB suite does **not** prove: it runs against a minimal shim of Supabase's roles and `auth` schema
-(`tests/db/supabase-shim.sql`), not real GoTrue/PostgREST/Supabase Storage. The shim revokes default privileges more
-strictly than Supabase's defaults, so migration 09 revokes explicitly and tests guard against regressions, but you
-should still run the migrations against a real Supabase **development** project and repeat the RLS checks there
-(see SECURITY_NOTES.md). Session minting after a successful Quick Login is verified only up to the GoTrue call.
+(`tests/db/supabase-shim.sql`), not real GoTrue/PostgREST/Supabase Storage. The flow tests (`quick-login-flow`,
+`setup-flow`) replace the Supabase **Auth HTTP API** with a small fake. **None of this is Supabase verification.**
+The real-Supabase suite (`tests/supabase-real`, [REAL_SUPABASE_VERIFICATION.md](./REAL_SUPABASE_VERIFICATION.md)) exists
+but has **not been executed** (no reachable Supabase project in the build sandbox).
+
+### Browser / runtime check (`bun run test:browser`)
+
+Builds the production bundle, runs it in **workerd** (`wrangler dev --local`), applies the real migrations to a real
+PostgreSQL, and drives `/setup` in real headless Chromium. Tooling is installed outside the repo
+(`npm i wrangler@4 @sparticuz/chromium puppeteer-core` in `$BROWSER_TOOLS_DIR`, default `/tmp/rt`). **A stand-in for the Supabase
+HTTP APIs** (`tests/browser/stand-in-supabase.mjs`, clearly not Supabase) forwards RPC calls to the real database; the check
+therefore verifies headers, CSP, hydration, the form flow, safe errors and bundle contents, and nothing about Supabase.
