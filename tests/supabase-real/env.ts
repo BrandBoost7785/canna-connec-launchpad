@@ -53,10 +53,23 @@ export function assertSafeToRun(): void {
         '(use "local" for a localhost Supabase CLI stack).',
     );
   }
-  const dbHost = new URL(process.env["SUPABASE_DB_URL"]!).hostname;
-  if (ref !== "local" && !dbHost.includes(ref)) {
+  const dbUrl = new URL(process.env["SUPABASE_DB_URL"]!);
+  // Direct hosts are db.<ref>.supabase.co; pooler hosts carry the ref in the user name (postgres.<ref>).
+  const dbOwnedByRef =
+    dbUrl.hostname.includes(ref) || decodeURIComponent(dbUrl.username).includes(ref);
+  if (ref !== "local" && !dbOwnedByRef) {
     throw new Error(
       "Refusing to run: SUPABASE_DB_URL does not appear to belong to the same project as SUPABASE_URL.",
+    );
+  }
+}
+
+/** Extra explicit opt-in for the destructive reset of the disposable project. */
+export function assertResetAllowed(): void {
+  assertSafeToRun();
+  if (process.env["SUPABASE_VERIFY_ALLOW_RESET"] !== "yes") {
+    throw new Error(
+      "Refusing to reset: set SUPABASE_VERIFY_ALLOW_RESET=yes (disposable test project ONLY).",
     );
   }
 }

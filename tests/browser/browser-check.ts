@@ -2,8 +2,12 @@
 //   * real PostgreSQL 17 with the real migrations (embedded-postgres, child process)
 //   * the built Cloudflare-style worker running in workerd (via `wrangler dev`)
 //   * real headless Chromium (puppeteer-core + @sparticuz/chromium)
-//   * a STAND-IN for the Supabase HTTP APIs (tests/browser/stand-in-supabase.mjs).
-//     It is NOT Supabase; this check says nothing about Supabase compatibility.
+//   * BACKEND (selected with BROWSER_BACKEND):
+//       - default "stand-in": a STAND-IN for the Supabase HTTP APIs
+//         (tests/browser/stand-in-supabase.mjs) over a local PostgreSQL. It is NOT Supabase; this
+//         mode says nothing about Supabase compatibility (regression evidence only).
+//       - "real": the dedicated DEVELOPMENT Supabase project (same SUPABASE_* variables and
+//         guards as tests/supabase-real). Needs a freshly migrated, not-yet-set-up project.
 //
 // Tooling is installed outside the repository so the project gains no heavy dependency:
 //   mkdir -p /tmp/rt && cd /tmp/rt && npm i wrangler@4 @sparticuz/chromium puppeteer-core
@@ -12,18 +16,21 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import pg from "pg";
+import { createClient } from "@supabase/supabase-js";
 import { applyMigrations, applySql } from "../db/migrations";
-// @ts-expect-error plain .mjs without types
-import { startStandIn } from "./stand-in-supabase.mjs";
+import { assertSafeToRun, env as realEnv } from "../supabase-real/env";
 
 const ROOT = path.resolve(__dirname, "../..");
 const TOOLS = process.env["BROWSER_TOOLS_DIR"] ?? "/tmp/rt";
 const req = createRequire(path.join(TOOLS, "package.json"));
 const rnd = (n: number) => randomBytes(n).toString("base64url");
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Dbq = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> };
 const results: { name: string; ok: boolean; detail?: string }[] = [];
 const check = (name: string, ok: boolean, detail?: string) => {
   results.push({ name, ok, ...(detail ? { detail } : {}) });
@@ -32,23 +39,35 @@ const check = (name: string, ok: boolean, detail?: string) => {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
+  const REAL = process.env["BROWSER_BACKEND"] === "real";
+  if (REAL) assertSafeToRun();
+  console.log(
+    REAL
+      ? "BACKEND: REAL dedicated development Supabase project (credentials not printed)"
+      : "BACKEND: STAND-IN for the Supabase HTTP APIs (NOT Supabase) over local PostgreSQL",
+  );
   const secrets = {
-    serviceKey: "svc_" + rnd(24),
-    publishableKey: "pub_" + rnd(24),
+    serviceKey: REAL ? realEnv("SUPABASE_SERVICE_ROLE_KEY") : "svc_" + rnd(24),
+    publishableKey: REAL ? realEnv("SUPABASE_PUBLISHABLE_KEY") : "pub_" + rnd(24),
     setupToken: "setup-" + rnd(40),
     rateKey: "rl-" + rnd(40),
-    adminPassword: "Pw-" + rnd(12),
+    adminPassword: `Aa1!${rnd(18)}`,
   };
-  // The browser client is configured at BUILD time with the two public values, so the production
-  // build is produced here with throw-away test values (never real project values).
+  const SUPABASE_URL = REAL ? realEnv("SUPABASE_URL") : "http://127.0.0.1:54321";
+  const adminEmail = REAL
+    ? `test-browser-admin-${rnd(4)
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "x")}@example.com`
+    : "owner@example.invalid";
+  // The browser client is configured at BUILD time with the two PUBLIC values.
   if (process.env["SKIP_BUILD"] !== "1") {
-    console.log("building production bundle with test-only VITE_SUPABASE_* values ...");
+    console.log("building production bundle (public VITE_SUPABASE_* values only) ...");
     const b = spawnSync("bun", ["run", "build"], {
       cwd: ROOT,
       stdio: "ignore",
       env: {
         ...process.env,
-        VITE_SUPABASE_URL: "http://127.0.0.1:54321",
+        VITE_SUPABASE_URL: SUPABASE_URL,
         VITE_SUPABASE_PUBLISHABLE_KEY: secrets.publishableKey,
       },
     });
@@ -58,50 +77,85 @@ async function main() {
   const cleanup: (() => Promise<void>)[] = [];
 
   try {
-    // ---- real PostgreSQL ------------------------------------------------------------
-    const pgChild = spawn(process.execPath, [path.join(ROOT, "tests/db/pg-server.mjs")], {
-      stdio: ["pipe", "pipe", "inherit"],
-      cwd: ROOT,
-    });
-    children.push(pgChild);
-    cleanup.push(async () => {
-      pgChild.kill("SIGTERM");
-    });
-    const info = await new Promise<{ port: number; password: string }>((resolve, reject) => {
-      let buf = "";
-      pgChild.stdout!.on("data", (c: Buffer) => {
-        buf += c.toString();
-        const m = /^READY (.+)$/m.exec(buf);
-        if (m) resolve(JSON.parse(m[1]!));
+    // ---- backend ------------------------------------------------------------------------
+    let dbq: Dbq;
+    if (REAL) {
+      const c = new pg.Client({ connectionString: realEnv("SUPABASE_DB_URL") });
+      await c.connect();
+      cleanup.push(() => c.end());
+      dbq = c;
+    } else {
+      const { startStandIn } = await import("./stand-in-supabase.mjs" as string);
+      const pgChild = spawn(process.execPath, [path.join(ROOT, "tests/db/pg-server.mjs")], {
+        stdio: ["pipe", "pipe", "inherit"],
+        cwd: ROOT,
       });
-      pgChild.on("exit", () => reject(new Error("pg exited")));
-    });
-    const cfg = (database: string) => ({
-      host: "127.0.0.1",
-      port: info.port,
-      user: "postgres",
-      password: info.password,
-      database,
-    });
-    const root = new pg.Client(cfg("postgres"));
-    await root.connect();
-    await root.query("create database cc_browser");
-    await root.end();
-    const mig = new pg.Client(cfg("cc_browser"));
-    await mig.connect();
-    await applySql(mig, path.join(ROOT, "tests/db/supabase-shim.sql"));
-    await applyMigrations(mig);
-    await mig.end();
-
-    // ---- stand-in Supabase API ------------------------------------------------------
-    const standIn = await startStandIn({
-      port: 54321,
-      pgConfig: cfg("cc_browser"),
-      serviceKey: secrets.serviceKey,
-    });
-    cleanup.push(() => standIn.close());
+      children.push(pgChild);
+      cleanup.push(async () => {
+        pgChild.kill("SIGTERM");
+      });
+      const info = await new Promise<{ port: number; password: string }>((resolve, reject) => {
+        let buf = "";
+        pgChild.stdout!.on("data", (c: Buffer) => {
+          buf += c.toString();
+          const m = /^READY (.+)$/m.exec(buf);
+          if (m) resolve(JSON.parse(m[1]!));
+        });
+        pgChild.on("exit", () => reject(new Error("pg exited")));
+      });
+      const cfg = (database: string) => ({
+        host: "127.0.0.1",
+        port: info.port,
+        user: "postgres",
+        password: info.password,
+        database,
+      });
+      const root = new pg.Client(cfg("postgres"));
+      await root.connect();
+      await root.query("create database cc_browser");
+      await root.end();
+      const mig = new pg.Client(cfg("cc_browser"));
+      await mig.connect();
+      await applySql(mig, path.join(ROOT, "tests/db/supabase-shim.sql"));
+      await applyMigrations(mig);
+      await mig.end();
+      const standIn = await startStandIn({
+        port: 54321,
+        pgConfig: cfg("cc_browser"),
+        serviceKey: secrets.serviceKey,
+      });
+      cleanup.push(() => standIn.close());
+      dbq = standIn.su;
+    }
+    // Fresh-project guard (real mode): setup must not have happened yet.
+    const pre = await dbq.query(
+      "select setup_completed_at is not null as done from public.business_settings",
+    );
+    if (pre.rows[0]?.["done"])
+      throw new Error("project is not fresh: setup already completed (reset it)");
 
     // ---- built worker in workerd ----------------------------------------------------
+    // Worker variables go through a git-ignored .dev.vars file (wrangler prints them as "(hidden)"),
+    // never through command-line flags.
+    const devVars = {
+      SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: secrets.serviceKey,
+      SUPABASE_PUBLISHABLE_KEY: secrets.publishableKey,
+      SETUP_TOKEN: secrets.setupToken,
+      RATE_LIMIT_KEY_SECRET: secrets.rateKey,
+      // TEST FIXTURE deployment values (the repository has no defaults for these):
+      SETUP_RATE_LIMIT_ATTEMPTS: "50",
+      SETUP_RATE_LIMIT_WINDOW_SECONDS: "3600",
+      CLIENT_IP_HEADER: "x-test-client-ip",
+    };
+    const varsFile = path.join(ROOT, ".output/server/.dev.vars");
+    writeFileSync(
+      varsFile,
+      Object.entries(devVars)
+        .map(([k, v]) => `${k}=${v}`)
+        .join("\n") + "\n",
+      { mode: 0o600 },
+    );
     const wr = spawn(
       path.join(TOOLS, "node_modules/.bin/wrangler"),
       [
@@ -113,23 +167,6 @@ async function main() {
         "8787",
         "--ip",
         "127.0.0.1",
-        "--var",
-        "SUPABASE_URL:http://127.0.0.1:54321",
-        "--var",
-        `SUPABASE_SERVICE_ROLE_KEY:${secrets.serviceKey}`,
-        "--var",
-        `SUPABASE_PUBLISHABLE_KEY:${secrets.publishableKey}`,
-        "--var",
-        `SETUP_TOKEN:${secrets.setupToken}`,
-        "--var",
-        `RATE_LIMIT_KEY_SECRET:${secrets.rateKey}`,
-        // TEST FIXTURE deployment values (the repository has no defaults for these):
-        "--var",
-        "SETUP_RATE_LIMIT_ATTEMPTS:50",
-        "--var",
-        "SETUP_RATE_LIMIT_WINDOW_SECONDS:3600",
-        "--var",
-        "CLIENT_IP_HEADER:x-test-client-ip",
       ],
       {
         cwd: TOOLS,
@@ -150,7 +187,7 @@ async function main() {
         /* not up yet */
       }
       await sleep(1000);
-      if (i === 89) throw new Error("worker did not start:\n" + wrLog.slice(-2000));
+      if (i === 89) throw new Error("worker did not start:\n" + wrLog.slice(-1200));
     }
 
     // ---- 1. raw HTTP headers --------------------------------------------------------
@@ -181,15 +218,15 @@ async function main() {
 
     // ---- 2. real browser ------------------------------------------------------------
     const puppeteer = req("puppeteer-core");
-    const chromium = req("@sparticuz/chromium").default ?? req("@sparticuz/chromium");
+    const chromiumModule = req("@sparticuz/chromium");
+    const chromium = chromiumModule.default ?? chromiumModule;
+    const inflate = chromiumModule.inflate ?? chromium.inflate;
     const executablePath: string = await chromium.executablePath();
     // On non-Lambda hosts @sparticuz/chromium does not unpack the shared libraries (nss/nspr) it
     // needs; unpack them explicitly and point the loader at them.
     const libDir = path.join(path.dirname(executablePath), "al2023", "lib");
     if (!existsSync(libDir)) {
-      await chromium.inflate(
-        path.join(TOOLS, "node_modules/@sparticuz/chromium/bin/al2023.tar.br"),
-      );
+      await inflate(path.join(TOOLS, "node_modules/@sparticuz/chromium/bin/al2023.tar.br"));
     }
     const browser = await puppeteer.launch({
       args: [...chromium.args, "--no-sandbox"],
@@ -314,7 +351,7 @@ async function main() {
     const fillAll = async (token: string) => {
       await fill("Setup token", token);
       await fill("Display name", "Browser Test Admin");
-      await fill("Email", "owner@example.invalid");
+      await fill("Email", adminEmail);
       await fill("Password", secrets.adminPassword);
       await fill("Business name", "BROWSER TEST BUSINESS");
       await fill("Time zone", "Africa/Johannesburg");
@@ -364,7 +401,7 @@ async function main() {
     );
     check(
       "no admin/settings created by the failed attempt",
-      (await standIn.su.query("select count(*)::int n from public.profiles")).rows[0].n === 0,
+      (await dbq.query("select count(*)::int n from public.profiles")).rows[0].n === 0,
     );
 
     // correct token
@@ -376,13 +413,13 @@ async function main() {
     });
     check("correct setup token completes setup in the browser", true);
 
-    const adm = (await standIn.su.query("select p.kind, p.status from public.profiles p")).rows;
+    const adm = (await dbq.query("select p.kind, p.status from public.profiles p")).rows;
     check(
       "exactly one approved admin profile created",
       adm.length === 1 && adm[0].kind === "admin" && adm[0].status === "approved",
     );
     const st = (
-      await standIn.su.query(
+      await dbq.query(
         "select business_name, timezone, login_lock_seconds, setup_completed_at is not null as done from public.business_settings",
       )
     ).rows[0];
@@ -393,7 +430,7 @@ async function main() {
         st.login_lock_seconds === 900 &&
         st.done,
     );
-    const rl = (await standIn.su.query("select key from public.rate_limits")).rows
+    const rl = (await dbq.query("select key from public.rate_limits")).rows
       .map((r: { key: string }) => r.key)
       .join(" ");
     check(
@@ -408,6 +445,47 @@ async function main() {
       (await page.evaluate(() => document.body.innerText)).includes("already been configured"),
     );
     check("form no longer rendered after completion", (await page.$$("input")).length === 0);
+
+    if (REAL) {
+      const u = await dbq.query("select id from auth.users where email = $1", [adminEmail]);
+      check("REAL Auth: the setup flow created exactly one auth user", u.rows.length === 1);
+      const sb = createClient(SUPABASE_URL, secrets.publishableKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const signed = await sb.auth.signInWithPassword({
+        email: adminEmail,
+        password: secrets.adminPassword,
+      });
+      check(
+        "REAL Auth: the setup admin can sign in and receives a session",
+        !!signed.data.session && !signed.error,
+      );
+      const prof = await dbq.query("select id from public.profiles");
+      check(
+        "REAL Auth: session subject equals the profile created by setup",
+        signed.data.user?.id === prof.rows[0]?.["id"],
+      );
+      const me = await sb.rpc("my_access");
+      check(
+        "REAL PostgREST: my_access resolves the session identity as approved admin",
+        (me.data as { kind?: string; status?: string } | null)?.kind === "admin" &&
+          (me.data as { status?: string }).status === "approved",
+      );
+      const handoff = process.env["SUPABASE_VERIFY_BROWSER_SETUP_FILE"];
+      if (handoff) {
+        mkdirSync(path.dirname(handoff), { recursive: true });
+        writeFileSync(
+          handoff,
+          JSON.stringify({
+            email: adminEmail,
+            password: secrets.adminPassword,
+            id: prof.rows[0]?.["id"],
+            setupToken: secrets.setupToken,
+          }),
+          { mode: 0o600 },
+        );
+      }
+    }
 
     // ---- 3. no secret in any client-delivered script or HTML ------------------------
     const bundles: string[] = [];

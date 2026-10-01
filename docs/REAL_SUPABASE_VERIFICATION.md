@@ -42,6 +42,27 @@ bun run test:supabase                        # the suite; keep the full output a
 Also configure the project as production would be: **disable public sign-ups** and note the password policy. Section D
 checks real behaviour but cannot see external dashboard settings.
 
+## Running it on GitHub Actions (when the sandbox/your machine cannot reach Supabase)
+
+`.github/workflows/real-supabase-verification.yml` runs, in order: **reset** of the disposable project, **migrate**,
+the **browser check against the real backend** (`bun run test:browser:real`, which performs first-run setup through the
+real UI), then the **suite**, then a final reset; logs are uploaded as an artifact. The project owner sets the
+configuration once (values are never printed by the workflow; the `gh secret set` form prompts and does not echo):
+
+```sh
+R=BrandBoost7785/canna-connec-launchpad
+gh secret set SUPABASE_TEST_URL              --repo $R
+gh secret set SUPABASE_TEST_PUBLISHABLE_KEY  --repo $R
+gh secret set SUPABASE_TEST_SERVICE_ROLE_KEY --repo $R
+gh secret set SUPABASE_TEST_DB_URL           --repo $R   # the *Session pooler* connection string (runners have no IPv6)
+gh variable set SUPABASE_TEST_PROJECT_REF    --repo $R --body <the-dev-project-ref>
+gh variable set SUPABASE_VERIFY_CONFIRM      --repo $R --body this-is-a-dedicated-disposable-test-project
+gh variable set SUPABASE_VERIFY_ALLOW_RESET  --repo $R --body yes
+```
+
+**The reset step deletes the foundation tables/functions/types and every `test-*@example.com` auth user in that
+project.** Use only a project that holds nothing you want to keep. (`bun run test:supabase:reset` is the same script.)
+
 ## Interpreting results
 
 Any failure is a finding, not a test to be loosened. Particularly likely places for real-vs-shim differences: Supabase's

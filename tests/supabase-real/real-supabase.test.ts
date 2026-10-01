@@ -19,6 +19,7 @@
 //                   project is disposable: reset it afterwards).
 // =============================================================================================
 import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -96,13 +97,20 @@ const FORBIDDEN = ["42501"]; // PostgREST surfaces "permission denied" with this
 
 const ids = {} as Record<string, string>;
 const cred = {} as Record<string, { email: string; password: string }>;
+let handoff: { email: string; password: string; id: string; setupToken: string } | null = null;
 let adminSession: Awaited<ReturnType<typeof signIn>>;
 
 beforeAll(async () => {
   db = new pg.Client({ connectionString: env("SUPABASE_DB_URL") });
   await db.connect();
   const { data } = await anon.rpc("get_setup_status");
-  if ((data as { setup_completed?: boolean } | null)?.setup_completed !== false) {
+  const completed = (data as { setup_completed?: boolean } | null)?.setup_completed;
+  const handoffFile = process.env["SUPABASE_VERIFY_BROWSER_SETUP_FILE"];
+  if (completed === true && handoffFile && existsSync(handoffFile)) {
+    // First-run setup was already performed through the BROWSER (tests/browser, BROWSER_BACKEND=real)
+    // against this same project; reuse that administrator instead of running setup again.
+    handoff = JSON.parse(readFileSync(handoffFile, "utf8"));
+  } else if (completed !== false) {
     throw new Error(
       "The test project is not a fresh foundation install (setup missing/complete). " +
         "Apply the migrations to a FRESH project (tests/supabase-real/apply-migrations.ts).",
@@ -113,7 +121,7 @@ beforeAll(async () => {
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", SVC_KEY);
   vi.stubEnv("RATE_LIMIT_KEY_SECRET", randomBytes(32).toString("hex"));
   vi.stubEnv("CLIENT_IP_HEADER", "x-test-client-ip");
-  vi.stubEnv("SETUP_TOKEN", "setup-" + randomBytes(24).toString("hex"));
+  vi.stubEnv("SETUP_TOKEN", handoff?.setupToken ?? "setup-" + randomBytes(24).toString("hex"));
   vi.stubEnv("SETUP_RATE_LIMIT_ATTEMPTS", "20"); // TEST FIXTURE
   vi.stubEnv("SETUP_RATE_LIMIT_WINDOW_SECONDS", "3600"); // TEST FIXTURE
 });
@@ -225,6 +233,16 @@ describe("B. anonymous access through the real API", () => {
 // ---------------------------------------------------------------------------------------------
 describe("C. first-run setup through the app's real server flow (real Auth admin API)", () => {
   it("creates the first administrator and stores the configuration", async () => {
+    if (handoff) {
+      // Setup already ran through the real browser flow; verify its outcome instead.
+      const p = await db.query("select id, kind, status from public.profiles");
+      expect(p.rows).toHaveLength(1);
+      expect(p.rows[0]).toMatchObject({ id: handoff.id, kind: "admin", status: "approved" });
+      cred["admin"] = { email: handoff.email, password: handoff.password };
+      ids["admin"] = handoff.id;
+      createdUsers.push(handoff.id);
+      return;
+    }
     const { completeFirstRunSetup } = await import("../../src/server/setup.server");
     const admin = { displayName: "TEST Admin", email: email("admin"), password: strongPassword() };
     cred["admin"] = { email: admin.email, password: admin.password };
