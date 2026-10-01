@@ -48,8 +48,8 @@ jobs:
       SUPABASE_VERIFY_PROJECT_REF: ${{ vars.SUPABASE_TEST_PROJECT_REF }}
       SUPABASE_VERIFY_CONFIRM: ${{ vars.SUPABASE_VERIFY_CONFIRM }}
       SUPABASE_VERIFY_ALLOW_RESET: ${{ vars.SUPABASE_VERIFY_ALLOW_RESET }}
-      BROWSER_TOOLS_DIR: ${{ runner.temp }}/rt
-      SUPABASE_VERIFY_BROWSER_SETUP_FILE: ${{ runner.temp }}/browser-setup-handoff.json
+      BROWSER_TOOLS_DIR: /tmp/rt
+      SUPABASE_VERIFY_BROWSER_SETUP_FILE: /tmp/browser-setup-handoff.json
     steps:
       - name: Check that the dedicated-project configuration is present (values are not printed)
         run: |
@@ -59,6 +59,8 @@ jobs:
             if [ -z "${!v}" ]; then echo "::error::$v is not configured"; missing=1; fi
           done
           exit $missing
+
+      - run: mkdir -p /tmp/real-logs
 
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -73,25 +75,25 @@ jobs:
           npm i --no-audit --no-fund wrangler@4 @sparticuz/chromium puppeteer-core
 
       - name: Reset the disposable project
-        run: bun run test:supabase:reset 2>&1 | tee "$RUNNER_TEMP/01-reset.log"
+        run: bun run test:supabase:reset 2>&1 | tee "/tmp/real-logs/01-reset.log"
 
       - name: Apply migrations to the real project
-        run: bun run test:supabase:migrate 2>&1 | tee "$RUNNER_TEMP/02-migrate.log"
+        run: bun run test:supabase:migrate 2>&1 | tee "/tmp/real-logs/02-migrate.log"
 
       - name: Browser check of the production build against the REAL backend
-        run: bun run test:browser:real 2>&1 | tee "$RUNNER_TEMP/03-browser-real.log"
+        run: bun run test:browser:real 2>&1 | tee "/tmp/real-logs/03-browser-real.log"
 
       - name: Real Supabase verification suite (catalog, PostgREST, Auth, quickLogin)
-        run: bun run test:supabase 2>&1 | tee "$RUNNER_TEMP/04-suite.log"
+        run: bun run test:supabase 2>&1 | tee "/tmp/real-logs/04-suite.log"
 
       - name: Leave the project clean of test users
         if: always()
-        run: bun run test:supabase:reset 2>&1 | tee "$RUNNER_TEMP/05-cleanup.log"
+        run: bun run test:supabase:reset 2>&1 | tee "/tmp/real-logs/05-cleanup.log"
 
       - name: Keep the logs as evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-supabase-verification-logs
-          path: ${{ runner.temp }}/*.log
+          path: /tmp/real-logs/*.log
           if-no-files-found: warn
